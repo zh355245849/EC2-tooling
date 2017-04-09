@@ -1,8 +1,13 @@
 #!/bin/env sh
 
-usage_for_tool() {
-    echo "The afewmore tool can be used to duplicate a given EC2 instance.  When doing so, it creates multiple new instances and populates their data directory by copying the data from the original.
-    Arguments options:
+PROG_NAME="$0"
+COPY_NUM=10
+COPY_DIR="/data"
+INSTANCE_ID=""
+VERBOSE="false"
+
+usage() {
+    echo "$PROG_NAME [-hv] [-d dir] [-n num] instance
     -d dir   Copy the contents of this data directory from the orignal source
 	      instance to all the new instances.  If not specified, defaults
 	      to /data.
@@ -12,22 +17,37 @@ usage_for_tool() {
 	      10.
 
     -v       Be verbose."
-    exit 0
 }
 
-option="${1}"
-case ${option} in
-   -h) usage_for_tool
-      ;;
-   -n) "source copyInstance"
-      ;;
-   -d) "source backup";;
-   -v) "source verbose";;
-   -*) "This argument is not support ${option}"
-      ;;
-   *)
-      echo "`basename ${0}`:usage: [-h usage]"
-      ;;
-esac
+show_config() {
+    echo "copy number: $COPY_NUM"
+    echo "copy directory: $COPY_DIR"
+    echo "instance id: $INSTANCE_ID"
+}
 
+while true ; do
+    case "$1" in
+        -h) usage ; exit 0 ;;
+        -d) shift ; COPY_DIR=$1 ; shift ;;
+        -n) shift ; COPY_NUM=$1 ; shift ;;
+        -v) shift ; VERBOSE="true" ;;
+        -*) echo "Invalid option $1"; usage ; exit 1 ;;
+        *)
+            if [ "$#" != "0" ] && [ "$INSTANCE_ID" != "" ] ; then
+                echo "Unknown options: $@"
+                usage
+                exit 1
+            elif [ "$#" != "0" ] && [ "$INSTANCE_ID" == "" ] ; then
+                INSTANCE_ID="$1"
+                shift
+            elif [ "$#" == "0" ] && [ "$INSTANCE_ID" == "" ] ; then
+                echo "Instance not specified."
+                usage
+                exit 1
+            else
+                show_config
+                exit 0
+            fi ;;
+    esac
+done
 
