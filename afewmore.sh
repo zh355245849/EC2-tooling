@@ -1,3 +1,5 @@
+#!/bin/env sh
+
 usage_for_tool() {
     echo "The afewmore tool can be used to duplicate a given EC2 instance.  When doing so, it creates multiple new instances and populates their data directory by copying the data from the original.
     Arguments options:
@@ -23,7 +25,7 @@ case ${option} in
    -v) "source verbose";;
    -*) "This argument is not support ${option}"
       ;;
-   *) 
+   *)
       echo "`basename ${0}`:usage: [-h usage]"
       ;;
 esac

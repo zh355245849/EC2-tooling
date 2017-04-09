@@ -1,0 +1,59 @@
+
+------------ Options Analysis -------------
+
+-d dir[= /data]
+
+COPY_DIR
+
+-h
+
+usage()
+
+-n num[= 10]
+
+COPY_NUM
+
+-v
+
+VERBOSE
+
+
+------------ Basic Function -------------
+
+0. config
+
+Config() // write to ~/.afewmore/...
+    > save progress
+
+1. create COPY_NUM instances & fetch info
+
+CreateNewInstance()
+    > create instance of the same image-id
+        > security-group
+        > security-key
+    > get
+        > instance-id
+
+2. copy data
+
+GetInstanceList()
+    > read config
+
+CopyToInstance()
+    > rsync
+
+3. what next?
+
+
+------------- Limitation --------------
+
+* COPY_NUM
+    > invalid number
+    > very large
+* COPY_DIR
+    > path not exist? create
+    > permission denied? sudo
+    > data in path is large (>GB)? prompt this to user
+    > or root path? prompt this to user
+    > path encode problem ? [ignored]
+
