@@ -22,8 +22,10 @@ VERBOSE
 
 0. config
 
-Config() // write to ~/.afewmore/...
-    > save progress
+Config() // ~/.afewmore/...
+    > number of instance to create
+    > created instance ids
+    > copied instance ids
 
 1. create COPY_NUM instances & fetch info
 
@@ -40,7 +42,7 @@ GetInstanceList()
     > read config
 
 CopyToInstance()
-    > rsync
+    > rsync -avr --progress -e "ssh -i us-east-1" data ubuntu@ip-172-31-46-157.ec2.internal:.
 
 3. what next?
 
@@ -52,6 +54,8 @@ CopyToInstance()
     > very large
 * COPY_DIR
     > path not exist? create
+    > path with ' ' (spaces)
+    > relative path? convert to canonical path
     > permission denied? sudo
     > data in path is large (>GB)? prompt this to user
     > or root path? prompt this to user
