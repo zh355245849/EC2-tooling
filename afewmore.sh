@@ -3,7 +3,7 @@
 PROG_NAME="afewmore"
 TASK_FILE="task.0"
 
-COPY_NUM=10
+COPY_NUM=1
 COPY_DIR="/data"
 INSTANCE_ID=""
 VERBOSE="false"
@@ -97,19 +97,19 @@ task_sync_end() {
 
 do_create() {
     local _origin=$1
-    local _remote=""
+    local _remote="i-0000000001"
 
     # echo "info: create instance from $_origin."
     task_create_begin $_origin
 
     # BEGIN
-    IMAGE_ID=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].ImageId | sed 's/\"//g' | grep [[:alnum:]]`
-    CREDENTIAL=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].KeyName | sed 's/\"//g' | grep "[[:alnum:]]"`
-    SECURITU_GROUP=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].SecurityGroups[].GroupId | sed 's/\"//g' | grep "[[:alnum:]]"`
-    AVAILABILITY_ZONE=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].Placement.AvailabilityZone | sed 's/\"//g' | grep "[[:alnum:]]"`
-    INSTANCE_TYPE=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].InstanceType | sed 's/\"//g' | grep "[[:alnum:]]"`
+    # IMAGE_ID=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].ImageId | sed 's/\"//g' | grep [[:alnum:]]`
+    # CREDENTIAL=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].KeyName | sed 's/\"//g' | grep "[[:alnum:]]"`
+    # SECURITU_GROUP=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].SecurityGroups[].GroupId | sed 's/\"//g' | grep "[[:alnum:]]"`
+    # AVAILABILITY_ZONE=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].Placement.AvailabilityZone | sed 's/\"//g' | grep "[[:alnum:]]"`
+    # INSTANCE_TYPE=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].InstanceType | sed 's/\"//g' | grep "[[:alnum:]]"`
 
-    aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITU_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL
+    # aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITU_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL
     # END
 
     task_create_end $_remote
@@ -157,7 +157,7 @@ main() {
 }
 
 while true ; do
-    case "$2" in
+    case "$1" in
         -h) usage ; exit 0 ;;
         -d) shift ; COPY_DIR="$1" ; shift ;;
         -n) shift ; COPY_NUM="$1" ; shift ;;
