@@ -52,7 +52,7 @@ verify_copy_dir() {
     fi
 }
 verify_instance() {
-    local re='^i-[0-9a-f]{10}$'
+    local re='^i-[0-9a-f]{17}$'
     if ! [[ "$1" =~ $re ]] ; then
         fatal "illegal instance id $1"
     fi
@@ -108,16 +108,13 @@ do_create() {
     task_create_begin $_origin
 
     # BEGIN
-    # IMAGE_ID=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].ImageId | sed 's/\"//g' | grep [[:alnum:]]`
-    # CREDENTIAL=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].KeyName | sed 's/\"//g' | grep "[[:alnum:]]"`
-    # SECURITU_GROUP=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].SecurityGroups[].GroupId | sed 's/\"//g' | grep "[[:alnum:]]"`
-    # AVAILABILITY_ZONE=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].Placement.AvailabilityZone | sed 's/\"//g' | grep "[[:alnum:]]"`
-    # INSTANCE_TYPE=`aws ec2 describe-instances --instance-ids $_origin --query Reservations[].Instances[].InstanceType | sed 's/\"//g' | grep "[[:alnum:]]"`
+    QUERY=`aws ec2 describe-instances --filters "Name=instance-id,Values=$_origin" --output text --query 'Reservations[*].Instances[*].{ImageId:ImageId, KeyName:KeyName, GroupId:SecurityGroups[*].GroupId, AvailabilityZone:Placement.AvailabilityZone, INSTANCE_TYPE:InstanceType}'`
 
-    # aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITU_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL
-    # END
-
-    task_create_end $_remote
+    read AVAILABILITY_ZONE INSTANCE_TYPE IMAGE_ID CREDENTIAL SECURITY_GROUP <<<$(echo $QUERY)
+    SECURITY_GROUP=$(echo "$SECURITY_GROUP" | cut -d ' ' -f 2)    
+    new_instance=`aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITY_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL --output text`
+    created_instance_id=$(echo "$new_instance" | tr -d '\n' |  tr '\t' ' ' |  cut -d ' ' -f 9) 
+    task_create_end $created_instance_id
 }
 
 do_sync() {
@@ -163,6 +160,7 @@ main() {
     do
         (do_create $_origin)
     done
+    exit 1
 
     # sync
     local _dir=$(head -n 1 $_task_file | sed 's/^.*://')
@@ -191,8 +189,8 @@ while true ; do
                 INSTANCE_ID="$1"
                 shift
             else
-                verify_task "$TASK_FILE"
-                verify_copy_dir "$COPY_DIR"
+                #verify_task "$TASK_FILE"
+                #verify_copy_dir "$COPY_DIR"
                 verify_copy_num "$COPY_NUM"
                 verify_instance "$INSTANCE_ID"
                 main
