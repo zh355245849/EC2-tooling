@@ -1,7 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 
 PROG_NAME="afewmore"
 TASK_FILE="task.0"
+PEM_FILE="us-east-1"
 
 COPY_NUM=1
 COPY_DIR="/data"
@@ -23,6 +24,9 @@ fatal() {
     usage
     exit 1
 }
+warning() {
+    echo "$PROG_NAME:" "$@" 1>&2
+}
 
 # verify & handle special situation
 verify_task() {
@@ -41,6 +45,7 @@ verify_copy_num() {
         fatal "illegal instance count $1"
     fi
 }
+# TODO: dir is at remote!!!
 verify_copy_dir() {
     if ! [ -d "$1" ]; then
         fatal "$1: No such directory"
@@ -86,12 +91,12 @@ task_create_end() {
 task_sync_begin() {
     local _remote=$1
     local _dir="$2"
-    sed -i ".old" "s/$_remote created/$_remote syncing/" $TASK_FILE
+    sed -i".old" "s/$_remote created/$_remote syncing/" $TASK_FILE
     echo "info: $_remote syncing '$_dir'"
 }
 task_sync_end() {
     local _remote=$1
-    sed -i ".old" "s/$_remote syncing/$_remote done/" $TASK_FILE
+    sed -i".old" "s/$_remote syncing/$_remote done/" $TASK_FILE
     echo "info: $_remote done"
 }
 
@@ -115,19 +120,33 @@ do_create() {
     task_create_end $_remote
 }
 
-# util_get_user() { LOGIN_USER="root" }
-# util_get_host() { LOGIN_HOST="" }
 do_sync() {
     local _origin=$1
     local _remote=$2
     local _dir="$3"
-    local _ssh_key=""
-    local _user=""
-    local _host=""
+    local _ssh_key=$PEM_FILE
+
+    local _host1=$(aws ec2 describe-instances --instance-ids $_origin --output text --query "Reservations[*].Instances[*].PublicDnsName")
+    local _host2=$(aws ec2 describe-instances --instance-ids $_remote --output text --query "Reservations[*].Instances[*].PublicDnsName")
+    if [ "$_host1" == "" ] ; then fatal "can't find instance $_origin (origin)"; fi
+    if [ "$_host2" == "" ] ; then fatal "can't find instance $_remote (to be sync)"; fi
+
+    local _user1=$(ssh -i $_ssh_key root@$_host1 "whoami")
+    local _user2=$(ssh -i $_ssh_key root@$_host2 "whoami")
+    if [ "$_user1" != "root" ]; then
+        _user1=$(echo $_user1 | sed 's/^[^"]*"([^"]+)".*$/\1/')
+    fi
+    if [ "$_user1" == "" ] ; then fatal "can't find instance $_origin (origin)"; fi
+    if [ "$_user2" == "" ] ; then fatal "can't find instance $_remote (to be sync)"; fi
 
     # echo "info: sync $_origin to $_remote..."
     task_sync_begin $_remote "$_dir"
+
+    # BEGIN
     # rsync -avr --progress -e "ssh -i $_ssh_key" -d $_dir $_user@$_host:$_dir
+    # scp -o StrictHostKeyChecking=no -3 -r -i $_ssh_key $_user1@$_host1:"$_dir" $_user2@$_host2:"$_dir"
+    # END
+
     task_sync_end $_remote
 }
 
