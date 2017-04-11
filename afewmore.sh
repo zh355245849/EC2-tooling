@@ -113,8 +113,8 @@ do_create() {
     read AVAILABILITY_ZONE INSTANCE_TYPE IMAGE_ID CREDENTIAL SECURITY_GROUP <<<$(echo $QUERY)
     SECURITY_GROUP=$(echo "$SECURITY_GROUP" | cut -d ' ' -f 2)    
     new_instance=`aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITY_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL --output text`
-    created_instance_id=$(echo "$new_instance" | tr -d '\n' |  tr '\t' ' ' |  cut -d ' ' -f 9) 
-    task_create_end $created_instance_id
+    _remote=$(echo "$new_instance" | tr -d '\n' |  tr '\t' ' ' |  cut -d ' ' -f 9) 
+    task_create_end $_remote
 }
 
 do_sync() {
