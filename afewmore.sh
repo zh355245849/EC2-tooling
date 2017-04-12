@@ -137,7 +137,7 @@ do_create() {
     local _remote=`aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITY_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL --query 'Instances[0].InstanceId' | sed 's/"//g'`
     verify_instance "$_remote" "failed to create instance"
 
-    local _host=$(util_get_host $_remote "")
+    local _host=$(util_get_host $_remote "") || exit 1
     while true; do
         inform "check if $_remote is ready..."
         local _ready=$(ssh-keyscan $_host 2>/dev/null)
@@ -157,11 +157,11 @@ do_sync() {
     local _dir="$3"
     local _ssh_key=$PEM_FILE
 
-    local _host1=$(util_get_host $_origin "(origin)")
-    local _host2=$(util_get_host $_remote "(to be sync)")
+    local _host1=$(util_get_host $_origin "(origin)") || exit 1
+    local _host2=$(util_get_host $_remote "(to be sync)") || exit 1
 
-    local _user1=$(util_get_user $_host1 $_ssh_key "(origin)")
-    local _user2=$(util_get_user $_host2 $_ssh_key "(to be sync)")
+    local _user1=$(util_get_user $_host1 $_ssh_key "(origin)") || exit 1
+    local _user2=$(util_get_user $_host2 $_ssh_key "(to be sync)") || exit 1
 
     # inform "sync $_origin to $_remote..."
 
@@ -197,9 +197,9 @@ main() {
     local _dir=$(head -n 1 $_task_file | sed 's/^.*://')
 
     # pre-creation verification
-    local _host=$(util_get_host $_origin "(origin)")
+    local _host=$(util_get_host $_origin "(origin)") || exit 1
     echo "main: found host $_host"
-    local _user=$(util_get_user $_host $_ssh_key "(origin)")
+    local _user=$(util_get_user $_host $_ssh_key "(origin)") || exit 1
     echo "main: found user $_user"
     local _dir_exist=$(ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user@$_host "if [ -d '$_dir' ] ; then echo T; else echo F; fi")
     if [ "$_dir_exist" == "T" ] ; then
