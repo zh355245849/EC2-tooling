@@ -1,51 +1,34 @@
 
------------- Options Analysis -------------
+------------ Main -------------
 
--d dir[= /data]
+1. parse options
 
-COPY_DIR
+2. create
 
--h
+3. sync
 
-usage()
+------------ Efficiency -------------
 
--n num[= 10]
+1. Minimize 'aws' call
 
-COPY_NUM
+------------ Robustness -------------
 
--v
-
-VERBOSE
-
-
------------- Basic Function -------------
-
-0. config
+1. config - save progress
 
 Config() // ~/.afewmore/...
     > number of instance to create
     > created instance ids
     > copied instance ids
 
-1. create COPY_NUM instances & fetch info
+2. error handling
 
-CreateNewInstance()
-    > create instance of the same image-id
-        > security-group
-        > security-key
-    > get
-        > instance-id
+------------ Correctness -------------
 
-2. copy data
+1. verification
 
-GetInstanceList()
-    > read config
+------------ Transparency -------------
 
-CopyToInstance()
-    > rsync -avr --progress -e "ssh -i us-east-1" data ubuntu@ip-172-31-46-157.ec2.internal:.
-
-3. what next?
-
+1. show file creation, 'aws' non-query commands run
 
 ------------- Limitation --------------
 

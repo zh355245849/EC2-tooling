@@ -1,28 +1,36 @@
 #!/bin/bash
 
+##### script configuration #####
+
 PROG_NAME="afewmore"
 TASK_FILE="task.0"
-PEM_FILE=$PEM_FILE_PATH
+PEM_FILE="us-east-1"
 
 COPY_NUM=1
 COPY_DIR="/data"
 INSTANCE_ID=""
-VERBOSE="false"
+VERBOSE="T"
+
+##### helper functions #####
 
 usage() {
-    echo "usage: $PROG_NAME [-hv] [-d dir] [-n num] instance"
-    echo "                -d dir   Copy the contents of this data directory from the"
-    echo "                         orignal source instance to all the new instances."
-    echo "                         If not specified, defaults to \"/data\"."
-    echo "                -h       Print a usage statement and exit."
-    echo "                -n num   Create this many new instances."
-    echo "                         If not specified, defaults to 10."
-    echo "                -v       Be verbose."
-}
-fatal_usage() {
-    echo "$PROG_NAME:" "$@" 1>&2
-    usage
-    exit 1
+    local _err_msg="$@"
+    if [ "$_err_msg" != "" ] ; then
+        echo 1>&2 "$PROG_NAME: $_err_msg"
+    fi
+    echo 1>&2 "usage: $PROG_NAME [-hv] [-d dir] [-n num] instance"
+    echo 1>&2 "                -d dir   Copy the contents of this data directory from the"
+    echo 1>&2 "                         orignal source instance to all the new instances."
+    echo 1>&2 "                         If not specified, defaults to \"/data\"."
+    echo 1>&2 "                -h       Print a usage statement and exit."
+    echo 1>&2 "                -n num   Create this many new instances."
+    echo 1>&2 "                         If not specified, defaults to 10."
+    echo 1>&2 "                -v       Be verbose."
+    if [ "$_err_msg" != "" ] ; then
+        exit 1
+    else
+        exit 0
+    fi
 }
 fatal() {
     echo "$PROG_NAME:" "$@" 1>&2
@@ -32,12 +40,17 @@ warning() {
     echo "[warn]" "$@" 1>&2
 }
 inform() {
-    if [ "$VERBOSE" == "true" ]; then
+    if [ "$VERBOSE" == "T" ] ; then
         echo "[info]" "$@"
     fi
 }
+# information shows to user when everything goes smoothly
+stdinfo() {
+    echo "$@"
+}
 
-# verify & handle special situation
+###### Verification #####
+
 verify_aws() {
     local _aws_loc=$(which aws)
     if [ "$_aws_loc" == "" ] ; then
@@ -71,33 +84,49 @@ verify_instance() {
         fatal "$_msg"
     fi
 }
+verify_copy_dir() {
+    local _ssh_key="$1"
+    local _user="$2"
+    local _host="$3"
+    local _dir="$4"
+    local _dir_exist=$(ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user@$_host "if [ -d '$_dir' ] ; then echo T; else echo F; fi")
+    if [ "$_dir_exist" != "T" ] ; then
+        fatal "can't find directory '$_dir' on origin instance $_origin"
+    fi
+}
+
+##### Configuration #####
 
 # task: a description of sync job status
 task_create_begin() {
-    local _origin=$1
-    inform "create instance from $_origin"
+    local _origin="$1"
+    local _index="$2"
+    inform "create duplicate instance $_index from origin instance ($_origin)"
 }
 task_create_end() {
-    local _remote=$1
+    local _remote="$1"
     echo "$_remote created" >>$TASK_FILE
-    echo "$_remote created"
+    inform "$_remote created"
 }
 task_sync_begin() {
-    local _remote=$1
+    local _remote="$1"
     local _dir="$2"
     sed -i".old" "s/$_remote created/$_remote syncing/" $TASK_FILE
     inform "$_remote syncing '$_dir'"
 }
 task_sync_end() {
-    local _succeed=$1
-    local _remote=$2
-    if [ "$_succeed" == "T" ] ; then
+    local _exit_code="$1"
+    local _remote="$2"
+    if [ "$_exit_code" == "0" ] ; then
         sed -i".old" "s/$_remote syncing/$_remote done/" $TASK_FILE
         inform "$_remote done"
+        stdinfo "$_remote"
     else
         inform "failed to sync $_remote"
     fi
 }
+
+##### Main Routines #####
 
 util_get_host() {
     local _instance_id=$1
@@ -108,6 +137,22 @@ util_get_host() {
     else
         echo $_host
     fi
+}
+wait_host_ready() {
+    local _host="$1"
+    local _msg="$2"
+    local _timeout=60
+    if [ "$_msg" != "" ] ; then
+        inform "$_msg"
+    fi
+    for ((i=0;i<_timeout;i+=3))
+    do
+        sleep 3
+        local _ret=$(ssh-keyscan $_host 2>/dev/null)
+        if [ "$?" == "0" ] && [ "$_ret" != "" ] ; then
+            break
+        fi
+    done
 }
 util_get_user() {
     local _host=$1
@@ -125,71 +170,56 @@ util_get_user() {
 
 # create instance & check status
 do_create() {
-    local _origin=$1
+    local _index="$1"
+    local _origin="$2"
 
-    # inform "create instance from $_origin."
-    task_create_begin $_origin
-
-    # BEGIN
-
-    QUERY=`aws ec2 describe-instances --filters "Name=instance-id,Values=$_origin" --output text --query 'Reservations[*].Instances[*].{ImageId:ImageId, KeyName:KeyName, GroupId:SecurityGroups[*].GroupId, AvailabilityZone:Placement.AvailabilityZone, INSTANCE_TYPE:InstanceType}'`
+    # read origin instance information
+    QUERY=$(aws ec2 describe-instances --filters "Name=instance-id,Values=$_origin" --output text --query 'Reservations[*].Instances[*].{ImageId:ImageId, KeyName:KeyName, GroupId:SecurityGroups[*].GroupId, AvailabilityZone:Placement.AvailabilityZone, INSTANCE_TYPE:InstanceType}')
     read AVAILABILITY_ZONE INSTANCE_TYPE IMAGE_ID CREDENTIAL SECURITY_GROUP <<<$(echo $QUERY)
     SECURITY_GROUP=$(echo "$SECURITY_GROUP" | cut -d ' ' -f 2)
 
-    local _remote=`aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITY_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL --query 'Instances[0].InstanceId' | sed 's/"//g'`
-    verify_instance "$_remote" "failed to create instance"
+    # create duplicate instance [i]
+    local _remote=$(aws ec2 run-instances --image-id $IMAGE_ID --security-group-ids $SECURITY_GROUP --count 1 --placement AvailabilityZone="$AVAILABILITY_ZONE" --instance-type $INSTANCE_TYPE --key-name $CREDENTIAL --query 'Instances[0].InstanceId' | sed 's/"//g')
+    verify_instance "$_remote" "failed to create instance $_index"
 
-    local _host=$(util_get_host $_remote "") || exit 1
-    while true; do
-        inform "check if $_remote is ready..."
-        local _ready=$(ssh-keyscan $_host 2>/dev/null)
-        if [ "$_ready" != "" ] ; then
-            break
-        fi
-        sleep 3
-    done
-    # END
+    ## inform "check if instance $_index($_remote) is ready..."
+    # moved to do_sync
+    echo "$_remote"
 
-    task_create_end $_remote
+    exit 0
 }
 
 do_sync() {
-    local _origin=$1
-    local _remote=$2
-    local _dir="$3"
+    local _index="$1"
+    local _origin="$2"
+    local _remote="$3"
+    local _dir="$4"
     local _ssh_key=$PEM_FILE
 
-    inform "sync: read host1"
     local _host1=$(util_get_host $_origin "(origin)") || exit 1
-    inform "sync: read host2"
-    local _host2=$(util_get_host $_remote "(to be sync)") || exit 1
+    local _host2=$(util_get_host $_remote "(duplicate $_index)") || exit 1
 
-    inform "sync: read user1"
+    wait_host_ready "$_host1" "wait for origin instance ($_origin) ready"
+    wait_host_ready "$_host2" "wait for duplicate instance $_index ($_remote) ready"
+
     local _user1=$(util_get_user $_host1 $_ssh_key "(origin)") || exit 1
-    inform "sync: read user2"
-    local _user2=$(util_get_user $_host2 $_ssh_key "(to be sync)") || exit 1
+    local _user2=$(util_get_user $_host2 $_ssh_key "(duplicate $_index)") || exit 1
 
-    # inform "sync $_origin to $_remote..."
-
-    task_sync_begin $_remote "$_dir"
-    # BEGIN
-    # rsync -avr --progress -e "ssh -i $_ssh_key" -d $_dir $_user@$_host:$_dir
-    local _succeed="F"
     for ((i=0; i<3; i++))
     do
         inform "$_origin -> $_remote, dir:$_dir, try $i"
         inform "$_user1@$_host1 -> $_user2@$_host2 :$_dir"
-        scp -o StrictHostKeyChecking=no -3 -r -i $_ssh_key $_user1@$_host1:"$_dir" $_user2@$_host2:"$_dir" 2>/dev/null
+        scp -o StrictHostKeyChecking=no -3 -r -i $_ssh_key $_user1@$_host1:"'$_dir'" $_user2@$_host2:"'$_dir'" 2>/dev/null
+        # rsync -avr --progress -e "ssh -i $_ssh_key" -d $_dir $_user@$_host:$_dir
         if [ "$?" == "0" ]; then
-            _succeed="T"
-            break
+            exit 0
         fi
     done
-    # END
-
-    task_sync_end $_succeed $_remote
+    exit 1
 }
 
+# TODO: fix index
+# TODO: when sync failed, retry (move retry logic here)
 main() {
     local _task_file=$TASK_FILE
     local _ssh_key=$PEM_FILE
@@ -197,61 +227,54 @@ main() {
     # TODO: create or read 'task'
     verify_task "$TASK_FILE"
     echo "$COPY_NUM $INSTANCE_ID :$COPY_DIR" >$_task_file
-
+    # parse task file
     local _num=$(head -n 1 $_task_file | awk '{print $1}')
     local _origin=$(head -n 1 $_task_file | awk '{print $2}')
     local _dir=$(head -n 1 $_task_file | sed 's/^.*://')
 
     # pre-creation verification
     local _host=$(util_get_host $_origin "(origin)") || exit 1
-    if [ "$VERBOSE" == "true" ]; then
-        echo "main: found host $_host"
-    fi
+    wait_host_ready "$_host" "wait for origin instance ($_origin) ready"
     local _user=$(util_get_user $_host $_ssh_key "(origin)") || exit 1
-    if [ "$_user" == "" ]; then exit 1; fi
-    if [ "$VERBOSE" == "true" ]; then
-        echo "main: found user $_user"
-    fi
-    local _dir_exist=$(ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user@$_host "if [ -d '$_dir' ] ; then echo T; else echo F; fi")
-    if [ "$_dir_exist" == "T" ] ; then
-        if [ "$VERBOSE" == "true" ]; then
-            echo "main: found directory $_dir"
-        fi
-    else
-        fatal "can't find directory '$_dir' on original instance $_origin"
-    fi
+    verify_copy_dir "$_ssh_key" "$_user" "$_host" "$_dir"
 
-    # TODO: when create failed, retry
     # create
     local _num_to_create=$(expr $_num - $(tail -n +2 $_task_file | wc -l | awk '{print $1}'))
     for ((i=0; i<_num_to_create; i++))
     do
-        (do_create $_origin)
+        task_create_begin "$_origin" "$i"
+        local _rem=$(do_create "$i" "$_origin")
+        task_create_end "$_rem"
     done
 
-    # TODO: when sync failed, retry (move retry logic here)
     # sync
+    local _index=0
     for _remote in $(tail -n +2 $_task_file | grep "created" | awk '{print $1}');
     do
-        (do_sync $_origin $_remote "$_dir")
+        task_sync_begin "$_remote" "$_dir"
+        (do_sync "$_index" "$_origin" "$_remote" "$_dir")
+        task_sync_end "$?" "$_remote"
+        _index=$(expr $_index + 1)
     done
 
     # done
-    echo "All done."
+    stdinfo "All done."
 }
+
+##### option parsing & verification #####
 
 while true ; do
     case "$1" in
-        -h) usage ; exit 0 ;;
+        -h) usage ;;
         -d) shift ; COPY_DIR="$1" ; shift ;;
         -n) shift ; COPY_NUM="$1" ; shift ;;
-        -v) shift ; VERBOSE="true" ;;
-        -*) fatal_usage "illegal option $1" $(usage) ;;
+        -v) shift ; VERBOSE="T" ;;
+        -*) usage "illegal option $1" ;;
         *)
             if [ "$#" != "0" ] && [ "$INSTANCE_ID" != "" ] ; then
-                fatal_usage "unknown options: $@"
+                usage "unknown options: $@"
             elif [ "$#" == "0" ] && [ "$INSTANCE_ID" == "" ] ; then
-                fatal_usage "instance not specified"
+                usage "instance not specified"
             elif [ "$#" != "0" ] && [ "$INSTANCE_ID" == "" ] ; then
                 INSTANCE_ID="$1"
                 shift
