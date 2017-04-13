@@ -2,7 +2,7 @@
 
 PROG_NAME="afewmore"
 TASK_FILE="task.0"
-PEM_FILE="us-east-1"
+PEM_FILE=$PEM_FILE_PATH
 
 COPY_NUM=1
 COPY_DIR="/data"
@@ -32,7 +32,9 @@ warning() {
     echo "[warn]" "$@" 1>&2
 }
 inform() {
-    echo "[info]" "$@"
+    if [ "$VERBOSE" == "true" ]; then
+        echo "[info]" "$@"
+    fi
 }
 
 # verify & handle special situation
@@ -78,7 +80,7 @@ task_create_begin() {
 task_create_end() {
     local _remote=$1
     echo "$_remote created" >>$TASK_FILE
-    inform "$_remote created"
+    echo "$_remote created"
 }
 task_sync_begin() {
     local _remote=$1
@@ -112,7 +114,7 @@ util_get_user() {
     local _ssh_key=$2
     local _user=$(ssh -o StrictHostKeyChecking=no -i $_ssh_key root@$_host "whoami" </dev/null 2>/dev/null)
     if [ "$_user" != "root" ] ; then
-        _user=$(echo $_user | sed 's/^[^"]*"([^"]+)".*$/\1/')
+        _user=$(echo $_user | sed -r 's/^[^"]*"([^"]+)".*$/\1/')
     fi
     if [ "$_user" == "" ] ; then
         fatal "failed to get user of host $_host"
@@ -157,10 +159,14 @@ do_sync() {
     local _dir="$3"
     local _ssh_key=$PEM_FILE
 
+    inform "sync: read host1"
     local _host1=$(util_get_host $_origin "(origin)") || exit 1
+    inform "sync: read host2"
     local _host2=$(util_get_host $_remote "(to be sync)") || exit 1
 
+    inform "sync: read user1"
     local _user1=$(util_get_user $_host1 $_ssh_key "(origin)") || exit 1
+    inform "sync: read user2"
     local _user2=$(util_get_user $_host2 $_ssh_key "(to be sync)") || exit 1
 
     # inform "sync $_origin to $_remote..."
@@ -198,12 +204,19 @@ main() {
 
     # pre-creation verification
     local _host=$(util_get_host $_origin "(origin)") || exit 1
-    echo "main: found host $_host"
+    if [ "$VERBOSE" == "true" ]; then
+        echo "main: found host $_host"
+    fi
     local _user=$(util_get_user $_host $_ssh_key "(origin)") || exit 1
-    echo "main: found user $_user"
+    if [ "$_user" == "" ]; then exit 1; fi
+    if [ "$VERBOSE" == "true" ]; then
+        echo "main: found user $_user"
+    fi
     local _dir_exist=$(ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user@$_host "if [ -d '$_dir' ] ; then echo T; else echo F; fi")
     if [ "$_dir_exist" == "T" ] ; then
-        echo "main: found directory $_dir"
+        if [ "$VERBOSE" == "true" ]; then
+            echo "main: found directory $_dir"
+        fi
     else
         fatal "can't find directory '$_dir' on original instance $_origin"
     fi
