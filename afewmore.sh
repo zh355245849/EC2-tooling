@@ -4,7 +4,7 @@
 
 PROG_NAME="afewmore"
 TASK_FILE="task.0"
-PEM_FILE="us-east-1"
+PEM_FILE="$HOME/devenv-key.pem"
 
 COPY_NUM=1
 COPY_DIR="/data"
@@ -209,8 +209,13 @@ do_sync() {
     do
         inform "$_origin -> $_remote, dir:$_dir, try $i"
         inform "$_user1@$_host1 -> $_user2@$_host2 :$_dir"
-        scp -o StrictHostKeyChecking=no -3 -r -i $_ssh_key $_user1@$_host1:"'$_dir'" $_user2@$_host2:"'$_dir'" 2>/dev/null
-        # rsync -avr --progress -e "ssh -i $_ssh_key" -d $_dir $_user@$_host:$_dir
+        local _tmp_key=$(ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 'if [ -e ".ssh/file.rsa" ]; then echo T; fi')
+        if [ "$_tmp_key" == "" ]; then
+            ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 'ssh-keygen -q -t rsa -f ./.ssh/file.rsa'
+        fi
+        file=`ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 'cat /$HOME/.ssh/file.rsa.pub'`
+        ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user2@$_host2 "echo $file >> ./.ssh/authorized_keys"
+        ssh -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 "rsync -q -avr --progress -e 'ssh -o StrictHostKeyChecking=no -i .ssh/file.rsa' -d $_dir/ $_user2@$_host2:$_dir/ 2>/dev/null"
         if [ "$?" == "0" ]; then
             exit 0
         fi
