@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# TODO: move all created files to '.afewmore'
 # TODO: remove PEM_FILE && ssh -i, add ssh config verification
 # TODO: make all path canonical
 
 ##### script configuration #####
 
-PROG_NAME="afewmore"
-TASK_FILE="task.0"
+PROG_NAME=$(basename "$0")
+CONFIG_DIR="$HOME/.afewmore"
+
+TASK_FILE="$CONFIG_DIR/task.0"
 PEM_FILE="us-east-1"
-# PEM_FILE="$HOME/.ssh/us-east-1"
 
 COPY_NUM=1
 COPY_DIR="/data"
@@ -47,6 +47,16 @@ warning() {
 inform() {
     if [ "$VERBOSE" == "T" ] ; then
         echo "[info]" "$@"
+    fi
+}
+yes_or_no() {
+    local _prompt_msg="$@"
+    read -p "${_prompt_msg}[y/n]" -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]] ; then
+        return 0
+    else
+        return 1
     fi
 }
 # information shows to user when everything goes smoothly
@@ -105,19 +115,29 @@ verify_copy_dir() {
 
 # All create/read/write code related to task are in this session
 
-eval "exec 200>${TASK_FILE}.lock"
 lock() {
-    flock -x 200
+    flock -x 202 || exit 1
 }
 unlock() {
-    flock -u 200
+    flock -u 202 || exit 1
 }
 
 task_create() {
-    task_verify "$TASK_FILE"
-    lock
-    echo "$COPY_NUM $INSTANCE_ID :$COPY_DIR" >$TASK_FILE
-    unlock
+    if ! [ -e "$TASK_FILE" ] ; then
+        echo "$COPY_NUM $INSTANCE_ID :$COPY_DIR" >$TASK_FILE
+    else
+        lock
+        local _total_num=$(head -n 1 $TASK_FILE | awk '{print $1}')
+        local _num_of_done=$(tail -n +2 $TASK_FILE | grep "done" | wc -l | awk '{print $1}')
+        unlock
+        if [ "$_total_num" != "$_num_of_done" ] ; then
+            yes_or_no "found unfinished task $TASK_FILE ($_num_of_done/$_total_num), continue it?" && return 0
+            yes_or_no "found unfinished task $TASK_FILE ($_num_of_done/$_total_num), delete it?" || exit 0
+        fi
+        lock
+        echo "$COPY_NUM $INSTANCE_ID :$COPY_DIR" >$TASK_FILE
+        unlock
+    fi
 }
 task_add() {
     local _instance="$1"
@@ -168,18 +188,6 @@ task_done() {
         echo "T"
     else
         echo "F"
-    fi
-}
-
-# TODO: better to ask "continue unfinished?"  when has unfinished task
-task_verify() {
-    local _task_file="$1"
-    if [ -e "$_task_file" ] ; then
-        local _total_num=$(head -n 1 $_task_file | awk '{print $1}')
-        local _num_of_done=$(tail -n +2 $_task_file | grep "done" | wc -l | awk '{print $1}')
-        if [ "$_total_num" != "$_num_of_done" ] ; then
-            fatal "found unfinished task -- $_task_file:$_num_of_done/$_total_num"
-        fi
     fi
 }
 
@@ -464,11 +472,17 @@ main() {
 
 ##### option parsing & verification #####
 
-# Make sure only one 'afewmore' is running.
-eval "exec 201>${PROG_NAME}.lock"
-flock -n 201 || fatal "another '$PROG_NAME' is running"
+# Create config directory
+mkdir -p "$CONFIG_DIR"
 
-# Parse options.
+# Make sure only one 'afewmore' is running.
+eval "exec 200>${CONFIG_DIR}/${PROG_NAME}.lock"
+flock -n 200 || fatal "another '$PROG_NAME' is running"
+
+# For lock()/unlock()
+eval "exec 202>${TASK_FILE}.lock" || fatal "failed to create task lock file ${TASK_FILE}.lock"
+
+# Parse options, execute main().
 while true ; do
     case "$1" in
         -h) usage ;;
