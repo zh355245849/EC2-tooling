@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# TODO: move all created files to '.afewmore'
+# TODO: remove PEM_FILE && ssh -i, add ssh config verification
+# TODO: make all path canonical
+
 ##### script configuration #####
 
 PROG_NAME="afewmore"
@@ -61,12 +65,7 @@ verify_aws() {
         fatal "aws not configured"
     fi
 }
-# verify_ssh_login() {
-#     local _ssh_loc=$(which ssh)
-#     if [ "$_ssh_loc" == "" ] ; then
-#         fatal "aws not installed"
-#     fi
-# }
+# verify_ssh_login()
 verify_copy_num() {
     local re='^[1-9][0-9]*$'
     if ! [[ "$1" =~ $re ]] ; then
@@ -106,39 +105,73 @@ verify_copy_dir() {
 
 # All create/read/write code related to task are in this session
 
+eval "exec 200>${TASK_FILE}.lock"
+lock() {
+    flock -x 200
+}
+unlock() {
+    flock -u 200
+}
+
 task_create() {
     task_verify "$TASK_FILE"
+    lock
     echo "$COPY_NUM $INSTANCE_ID :$COPY_DIR" >$TASK_FILE
+    unlock
 }
 task_add() {
     local _instance="$1"
-    echo "$_instance created" >>"$TASK_FILE"
+    local _status="$2"
+    lock
+    echo "$_instance $_status" >>"$TASK_FILE"
+    unlock
 }
 task_change() {
     local _instance="$1"
     local _old_status="$2"
     local _new_status="$3"
+    lock
     sed -i".old" "s/$_instance $_old_status/$_instance $_new_status/" "$TASK_FILE"
+    unlock
 }
-task_read_total_num() {
-    echo $(head -n 1 "$TASK_FILE" | awk '{print $1}')
+task_find() {
+    local _status="$1"
+    lock
+    echo $(tail -n +2 $TASK_FILE | grep "$_status" | awk '{print $1}')
+    unlock
 }
-task_read_num_to_create() {
-    echo $(expr $(task_read_total_num) - $(tail -n +2 $TASK_FILE | wc -l | awk '{print $1}'))
-}
-task_read_sync_list() {
-    echo $(tail -n +2 $TASK_FILE | grep "created" | awk '{print $1}');
+task_count() {
+    local _status="$1"
+    lock
+    echo $(tail -n +2 $TASK_FILE | grep "$_status" | wc -l | awk '{print $1}')
+    unlock
 }
 task_read_origin() {
+    lock
     echo $(head -n 1 $TASK_FILE | awk '{print $2}')
+    unlock
 }
 task_read_dir() {
+    lock
     # when read directory, try append '/', which will affect how 'rsync' works later
     echo $(head -n 1 $TASK_FILE | sed 's/^.*://' | sed 's/[^\/]$/&\//')
+    unlock
+}
+task_read_total_num() {
+    lock
+    echo $(head -n 1 "$TASK_FILE" | awk '{print $1}')
+    unlock
+}
+task_done() {
+    local _todo=$(expr $(task_read_total_num) - $(task_count "done"))
+    if [[ $_todo == 0 ]] ; then
+        echo "T"
+    else
+        echo "F"
+    fi
 }
 
-# 1. No unfinished task
-# TODO: 2. Only one 'afewmore' is running (current one)
+# TODO: better to ask "continue unfinished?"  when has unfinished task
 task_verify() {
     local _task_file="$1"
     if [ -e "$_task_file" ] ; then
@@ -162,20 +195,52 @@ when_instance_create_end() {
     local _dup_id="$2"
     local _index="$3"
     if [ "$_dup_id" != "" ] && [ "$_exit_code" == "0" ] ; then
-        task_add "$_dup_id"
-        inform "duplicate instance $_index ($_dup_id) created"
+        task_add "$_dup_id" "created"
+        inform "duplicate instance $_index created ($_dup_id)"
     else
         inform "failed to create instance $_index ($_dup_id)"
+    fi
+}
+when_instance_ready_begin() {
+    local _dup_id="$1"
+    local _index="$2"
+    inform "wait for duplicate instance $_index ready ($_dup_id)"
+}
+when_instance_ready_end() {
+    local _exit_code="$1"
+    local _dup_id="$2"
+    local _index="$3"
+    if [ "$_dup_id" != "" ] && [ "$_exit_code" == "0" ] ; then
+        task_change "$_dup_id" "created" "ready"
+        inform "duplicate instance $_index ready to be sync ($_dup_id)"
+    else
+        inform "bad duplicate instance $_index ($_dup_id)"
     fi
 }
 when_instance_sync_begin() {
     local _dup_id="$1"
     local _dir="$2"
     local _index="$3"
-    task_change "$_dup_id" "created" "syncing"
+    task_change "$_dup_id" "ready" "syncing"
     inform "syncing '$_dir' to duplicate instance $_index ($_dup_id)"
 }
 when_instance_sync_end() {
+    local _exit_code="$1"
+    local _dup_id="$2"
+    local _index="$3"
+    if [ "$_exit_code" == "0" ] ; then
+        inform "duplicate instance $_index finished sync ($_dup_id)"
+    else
+        task_change "$_dup_id" "syncing" "ready"
+        inform "failed to sync duplicate instance $_index ($_dup_id)"
+    fi
+}
+when_instance_done_begin() {
+    local _dup_id="$1"
+    local _index="$2"
+    inform "check sync result of duplicate instance $_index ($_dup_id)"
+}
+when_instance_done_end() {
     local _exit_code="$1"
     local _dup_id="$2"
     local _index="$3"
@@ -184,7 +249,7 @@ when_instance_sync_end() {
         inform "duplicate instance $_index done ($_dup_id)"
         TellUser "$_dup_id"
     else
-        task_change "$_dup_id" "syncing" "created"
+        task_change "$_dup_id" "syncing" "ready"
         inform "failed to sync duplicate instance $_index ($_dup_id)"
     fi
 }
@@ -201,27 +266,6 @@ util_get_host() {
         echo $_host
     fi
 }
-# TODO: better check machanism
-wait_host_ready() {
-    local _instance="$1"
-    local _host="$2"
-    local _msg="$3"
-    local _timeout=300
-    inform "wait for $_msg instance ($_instance) ready"
-    for ((i=0;i<_timeout;i+=6))
-    do
-        sleep 6
-        # read _inst_status _sys_status<<<$(aws ec2 describe-instance-status --instance-id $_instance --output text --query 'InstanceStatuses[0].{system:SystemStatus.Status,inst:InstanceStatus.Status}')
-        # if [ "$_inst_status" != "ok" ] || [ "$_sys_status" != "ok" ] ; then
-        #     continue
-        # fi
-        local _ret=$(ssh-keyscan $_host 2>/dev/null)
-        if [ "$?" == "0" ] && [ "$_ret" != "" ] ; then
-            return 0
-        fi
-    done
-    fatal "wait timeout, instance=$_instance"
-}
 util_get_user() {
     local _host=$1
     local _ssh_key=$2
@@ -236,6 +280,7 @@ util_get_user() {
     fi
 }
 
+# TODO: create or reboot
 do_create() {
     local _index="$1"
     local _origin_id="$2"
@@ -247,8 +292,6 @@ do_create() {
         --query 'Reservations[*].Instances[*].{ImageId:ImageId,KeyName:KeyName,GroupId:SecurityGroups[*].GroupId,AvailabilityZone:Placement.AvailabilityZone,InstanceType:InstanceType}')
     read _avail_zone _img_id _inst_type _key_name _group_ids<<<$(echo "$_query")
     _group_ids=$(echo "$_group_ids" | sed 's/GROUPID //g')
-    # echo 1>&2 $_avail_zone $_inst_type $_img_id $_key_name $_group_ids
-    # exit 1
 
     # create duplicate instance [i]
     local _dup_id=$(aws ec2 run-instances \
@@ -270,6 +313,31 @@ do_create() {
     exit 0
 }
 
+# TODO: improve 'ready' check
+do_check_ready() {
+    local _instance="$1"
+    local _msg="$2"
+
+    local _host=$(util_get_host "$_instance" "$_msg")
+    if [ "$_host" == "" ]; then exit 1; fi
+
+    local _timeout=300
+    for ((i=0;i<_timeout;i+=6))
+    do
+        # read _inst_status _sys_status<<<$(aws ec2 describe-instance-status --instance-id $_instance --output text --query 'InstanceStatuses[0].{system:SystemStatus.Status,inst:InstanceStatus.Status}')
+        # if [ "$_inst_status" != "ok" ] || [ "$_sys_status" != "ok" ] ; then
+        #     continue
+        # fi
+        local _ret=$(ssh-keyscan $_host 2>/dev/null)
+        if [ "$?" == "0" ] && [ "$_ret" != "" ] ; then
+            exit 0
+        fi
+        sleep 6
+    done
+    fatal "wait instance $_instance timeout $_msg"
+}
+
+# TODO: we need a better sync strategy !!!! (solve permission problem)
 do_sync() {
     local _index="$1"
     local _origin_id="$2"
@@ -281,9 +349,6 @@ do_sync() {
     if [ "$_host1" == "" ]; then exit 1; fi
     local _host2=$(util_get_host $_dup_id "(duplicate $_index)")
     if [ "$_host2" == "" ]; then exit 1; fi
-
-    wait_host_ready "$_origin_id" "$_host1" "origin"
-    wait_host_ready "$_dup_id" "$_host2" "duplicate $_index"
 
     local _user1=$(util_get_user $_host1 $_ssh_key "(origin)")
     if [ "$_user1" == "" ]; then exit 1; fi
@@ -300,7 +365,7 @@ do_sync() {
             # generate temporary SSH key
             local _tmp_key=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 'if [ -e ".ssh/afewmore_tmp.rsa" ]; then echo T; fi')
             if [ "$_tmp_key" == "" ]; then
-                ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 'ssh-keygen -q -t rsa -f ./.ssh/afewmore_tmp.rsa'
+                ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 'ssh-keygen -N "" -q -t rsa -f ./.ssh/afewmore_tmp.rsa'
             fi
             local _tmp_pubkey=`ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i $_ssh_key $_user1@$_host1 'cat /$HOME/.ssh/afewmore_tmp.rsa.pub'`
             ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i $_ssh_key $_user2@$_host2 "echo $_tmp_pubkey >> ./.ssh/authorized_keys"
@@ -322,6 +387,14 @@ do_sync() {
     exit 1
 }
 
+# TODO: check sync result
+do_check_done() {
+    local _origin_id="$1"
+    local _dup_id="$2"
+    local _dir="$3"
+    exit 0
+}
+
 # TODO: fix index
 main() {
     local _ssh_key=$PEM_FILE
@@ -333,28 +406,56 @@ main() {
     # pre-creation verification
     local _host=$(util_get_host $_origin_id "(origin)")
     if [ "$_host" == "" ]; then exit 1; fi
-    wait_host_ready "$_origin_id" "$_host" "origin"
+    (do_check_ready "$_origin_id" "(origin)")
+    if [ "$?" != "0" ]; then exit 1; fi
     local _user=$(util_get_user $_host $_ssh_key "(origin)")
     if [ "$_user" == "" ]; then exit 1; fi
     verify_copy_dir "$_ssh_key" "$_origin_id" "$_user" "$_host" "$_dir"
 
-    # create
-    local _num_to_create=$(task_read_num_to_create)
-    for ((i=0; i<_num_to_create; i++))
+    while [ $(task_done) != "T" ] ;
     do
-        when_instance_create_begin "$_origin_id" "$i"
-        local _rem=$(do_create "$i" "$_origin_id")
-        when_instance_create_end "$?" "$_rem" "$i"
-    done
+        # -> created
+        local _num_to_create=$(expr $(task_read_total_num) - $(task_count ""))
+        for ((i=0; i<_num_to_create; i++))
+        do
+            when_instance_create_begin "$_origin_id" "$i"
+            local _dup_id=$(do_create "$i" "$_origin_id")
+            when_instance_create_end "$?" "$_dup_id" "$i"
+        done
 
-    # sync
-    local _index=0
-    for _dup_id in $(task_read_sync_list);
-    do
-        when_instance_sync_begin "$_dup_id" "$_dir" "$_index"
-        (do_sync "$_index" "$_origin_id" "$_dup_id" "$_dir")
-        when_instance_sync_end "$?" "$_dup_id" "$_index"
-        _index=$(expr $_index + 1)
+        # created -> ready
+        local _index=0
+        for _dup_id in $(task_find "created");
+        do
+            when_instance_ready_begin "$_dup_id" "$_index"
+            (do_check_ready "$_dup_id" "(duplicate $_index)")
+            when_instance_ready_end "$?" "$_dup_id" "$_index"
+            _index=$(expr $_index + 1)
+        done
+
+        # ready -> syncing
+        _index=0
+        for _dup_id in $(task_find "ready");
+        do
+            # sync
+            when_instance_sync_begin "$_dup_id" "$_dir" "$_index"
+            (do_sync "$_index" "$_origin_id" "$_dup_id" "$_dir")
+            when_instance_sync_end "$?" "$_dup_id" "$_index"
+            _index=$(expr $_index + 1)
+        done
+
+        # syncing -> done
+        _index=0
+        for _dup_id in $(task_find "syncing");
+        do
+            # check done
+            when_instance_done_begin "$_dup_id" "$_index"
+            (do_check_done "$_origin_id" "$_dup_id" "$_dir")
+            when_instance_done_end "$?" "$_dup_id" "$_index"
+            _index=$(expr $_index + 1)
+        done
+
+        inform '---- all:' $(task_read_total_num) 'done:' $(task_count 'done') '----'
     done
 
     # done
@@ -363,6 +464,11 @@ main() {
 
 ##### option parsing & verification #####
 
+# Make sure only one 'afewmore' is running.
+eval "exec 201>${PROG_NAME}.lock"
+flock -n 201 || fatal "another '$PROG_NAME' is running"
+
+# Parse options.
 while true ; do
     case "$1" in
         -h) usage ;;
