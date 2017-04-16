@@ -25,6 +25,8 @@ Config() // ~/.afewmore/...
 ------------ Correctness -------------
 
 1. verification
+    > ...
+    > make sure only one 'afewmore' is running.
 
 ------------ Transparency -------------
 
@@ -43,4 +45,13 @@ Config() // ~/.afewmore/...
     > data in path is large (>GB)? prompt this to user
     > or root path? prompt this to user
     > path encode problem ? [ignored]
+
+--------------- Test ---------------
+
+> duplicate 1 instance [Done]
+> duplicate 3 instance [Done]
+> duplicate netbsd [Done]
+> duplicate linux
+> duplicate fedora
+> duplicate ominios
 
