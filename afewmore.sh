@@ -117,10 +117,18 @@ verify_copy_dir() {
     if [ "$?" != "0" ]; then exit 1; fi
     local _user=$(util_get_user $_host "(origin)")
     if [ "$_user" == "" ]; then exit 1; fi
+    if [ "${_dir::1}" != "/" ] ; then
+        local _pwd=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user@$_host 'pwd')
+        if [ "$?" != "0" ]; then
+            fatal "failed to get full path of '$_dir' on instance $_origin_id (origin)"
+        fi
+        _dir="$_pwd/$_dir"
+    fi
     local _dir_exist=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user@$_host "if [ -d '$_dir' ] ; then echo T; else echo F; fi")
     if [ "$_dir_exist" != "T" ] ; then
         fatal "can't find directory '$_dir' on instance $_origin_id (origin)"
     fi
+    COPY_DIR="$_dir"
 }
 
 ##### Configuration #####
@@ -578,13 +586,7 @@ eval "exec 202>${TASK_FILE}.lock" || fatal "failed to create task lock file ${TA
 while true ; do
     case "$1" in
         -h) usage ;;
-        -d) shift ;
-            if [ "${1::1}" == "/" ]; then
-                COPY_DIR="$1"
-            else
-                COPY_DIR="$PWD/$1"
-            fi;
-            shift ;;
+        -d) shift ; COPY_DIR="$1" ; shift ;;
         -n) shift ; COPY_NUM="$1" ; shift ;;
         -v) shift ; VERBOSE="T" ;;
         -*) usage "illegal option $1" ;;
