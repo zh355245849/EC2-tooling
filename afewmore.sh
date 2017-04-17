@@ -252,9 +252,13 @@ when_instance_ready_end() {
         task_change "$_dup_id" "created" "ready"
         inform "duplicate instance $_index ready to be sync ($_dup_id)"
     else
-        inform "failed to connect duplicate instance $_index, try reboot ($_dup_id)"
-        # send reboot command
-        (aws ec2 reboot-instances --instance-ids "$_dup_id"  1>/dev/null 2>/dev/null)
+        if [ "$_exit_code" == "2" ] ; then
+            inform "failed to connect duplicate instance $_index, try reboot ($_dup_id)"
+            # send reboot command
+            (aws ec2 reboot-instances --instance-ids "$_dup_id"  1>/dev/null 2>/dev/null)
+        else
+            inform "failed to connect duplicate instance $_index ($_dup_id)"
+        fi
     fi
 }
 when_instance_sync_begin() {
@@ -369,7 +373,8 @@ do_check_ready() {
         fi
         sleep 6
     done
-    fatal "wait instance $_instance timeout $_msg"
+    (fatal "wait instance $_instance timeout $_msg")
+    exit 2
 }
 
 do_sync() {
