@@ -458,16 +458,7 @@ do_sync() {
     (scp -o BatchMode=yes -o StrictHostKeyChecking=no -3 -r "$_user1@$_host1:$_dir" "$_user2@$_host2:$_tmp_dir")
     if [ "$?" != "0" ]; then exit 1; fi
     # clean dest directory
-    local _line=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "find '$_dir' 2>/dev/null | tail -n +2 | wc -l")
-    if [ "$?" != "0" ]; then
-        fatal "failed to clean directory '$_dir' on duplicate instance $_index ($_dup_id)"
-    fi
-    if [[ $_line > 0 ]] ; then
-        (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "rm -rf \$(find '$_dir' 2>/dev/null | tail -n +2)")
-        if [ "$?" != "0" ]; then
-            fatal "failed to clean directory '$_dir' on duplicate instance $_index ($_dup_id)"
-        fi
-    fi
+    (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "rm -rf \$(find '$_dir' 2>/dev/null | tail -n +2)")
     # move from /tmp to dest directory
     (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "mv -f '$_tmp_dir' '$(dirname $_dir)'")
     if [ "$?" != "0" ]; then
