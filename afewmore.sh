@@ -237,7 +237,9 @@ when_instance_ready_end() {
         task_change "$_dup_id" "created" "ready"
         inform "duplicate instance $_index ready to be sync ($_dup_id)"
     else
-        inform "bad duplicate instance $_index ($_dup_id)"
+        inform "failed to connect duplicate instance $_index, try reboot ($_dup_id)"
+        # send reboot command
+        (aws ec2 reboot-instances --instance-ids "$_dup_id"  2>&1 1>/dev/null)
     fi
 }
 when_instance_sync_begin() {
@@ -396,7 +398,7 @@ do_sync() {
                 exit 0
             fi
         else
-            warning "origin instance ($_origin_id) doesn't support 'rsync'"
+            # warning "origin instance ($_origin_id) doesn't support 'rsync'"
             ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "mkdir -p '$_dir'"
             echo scp -o BatchMode=yes -o StrictHostKeyChecking=no -3 -r "'$_user1@$_host1:${_dir}.*'" "'$_user2@$_host2:$_dir'" | sh
             exit 0
@@ -432,15 +434,22 @@ main() {
 
     # main loop
     inform "Start main loop."
+    # if we didn't make any progress in 3 loops, stop trying and exit
+    local _try=3
     while [ $(task_done) != "T" ] ;
     do
+        local _progress=0
+        local _exit_code=0
+
         # -> created
         local _num_to_create=$(expr $(task_read_total_num) - $(task_count ""))
         for ((i=0; i<_num_to_create; i++))
         do
             when_instance_create_begin "$_origin_id" "$i"
             local _dup_id=$(do_create "$i" "$_origin_id")
-            when_instance_create_end "$?" "$_dup_id" "$i"
+            _exit_code="$?"
+            if [[ $_exit_code == 0 ]] ; then _progress=$(expr $_progress + 1); fi
+            when_instance_create_end "$_exit_code" "$_dup_id" "$i"
         done
 
         # created -> ready
@@ -449,7 +458,9 @@ main() {
         do
             when_instance_ready_begin "$_dup_id" "$_index"
             (do_check_ready "$_dup_id" "(duplicate $_index)")
-            when_instance_ready_end "$?" "$_dup_id" "$_index"
+            _exit_code="$?"
+            if [[ $_exit_code == 0 ]] ; then _progress=$(expr $_progress + 1); fi
+            when_instance_ready_end "$_exit_code" "$_dup_id" "$_index"
             _index=$(expr $_index + 1)
         done
 
@@ -460,7 +471,9 @@ main() {
             # sync
             when_instance_sync_begin "$_dup_id" "$_dir" "$_index"
             (do_sync "$_index" "$_origin_id" "$_dup_id" "$_dir")
-            when_instance_sync_end "$?" "$_dup_id" "$_index"
+            _exit_code="$?"
+            if [[ $_exit_code == 0 ]] ; then _progress=$(expr $_progress + 1); fi
+            when_instance_sync_end "$_exit_code" "$_dup_id" "$_index"
             _index=$(expr $_index + 1)
         done
 
@@ -471,11 +484,20 @@ main() {
             # check done
             when_instance_done_begin "$_dup_id" "$_index"
             (do_check_done "$_origin_id" "$_dup_id" "$_dir")
-            when_instance_done_end "$?" "$_dup_id" "$_index"
+            _exit_code="$?"
+            if [[ $_exit_code == 0 ]] ; then _progress=$(expr $_progress + 1); fi
+            when_instance_done_end "$_exit_code" "$_dup_id" "$_index"
             _index=$(expr $_index + 1)
         done
 
         inform '---- all:' $(task_read_total_num) 'done:' $(task_count 'done') '----'
+        if [[ $_progress == 0 ]] ; then
+            if [[ $_try > 0 ]] ; then
+                _try=$(expr $_try - 1)
+            else
+                fatal 'Failed too many times,' $(task_count '') 'instances created,' $(task_count 'done') 'instances finished syncing.'
+            fi
+        fi
     done
     inform "All done."
 }
