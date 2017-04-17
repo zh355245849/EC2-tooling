@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# TODO: make all path canonical
-
 ##### script configuration #####
 
 PROG_NAME=$(basename "$0")
@@ -36,11 +34,11 @@ usage() {
     fi
 }
 fatal() {
-    echo "$PROG_NAME:" "$@" 1>&2
+    echo 1>&2 "$PROG_NAME:" "$@"
     exit 1
 }
 warning() {
-    echo "[warn]" "$@" 1>&2
+    echo 1>&2 "[warn]" "$@"
 }
 inform() {
     if [ "$VERBOSE" == "T" ] ; then
@@ -81,7 +79,9 @@ verify_ssh() {
     fi
     local _host=$(util_get_host $_origin_id "(origin)")
     if [ "$_host" == "" ]; then exit 1; fi
-    local _login_test=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $USER@$_host "echo Y" 2>/dev/null)
+    local _user=$(util_get_user $_host "(origin)")
+    if [ "$_user" == "" ]; then exit 1; fi
+    local _login_test=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user@$_host "echo Y" 2>/dev/null)
     if [ "$_login_test" != "Y" ] ; then
         fatal "ssh not properly configured"
     fi
@@ -105,6 +105,9 @@ verify_copy_dir() {
 
     if [ "$_dir" == "" ] ; then
         fatal "directory can't be empty"
+    fi
+    if [ "$_dir" == "/" ] ; then
+        fatal "sync root directory '/' is not supported"
     fi
 
     # check if origin instance has directory
@@ -146,7 +149,11 @@ task_create() {
         local _num_of_done=$(tail -n +2 $TASK_FILE | grep "done" | wc -l | awk '{print $1}')
         unlock
         if [ "$_total_num" != "$_num_of_done" ] ; then
-            yes_or_no "found unfinished task $TASK_FILE ($_num_of_done/$_total_num), continue it?" && return 0
+            yes_or_no "found unfinished task $TASK_FILE ($_num_of_done/$_total_num), continue it?" \
+                && lock \
+                && sed -i".old" -r 's/(i.*) syncing/\1 ready/' "$TASK_FILE" \
+                && unlock \
+                && return 0
             yes_or_no "found unfinished task $TASK_FILE ($_num_of_done/$_total_num), delete it?" || exit 0
         fi
         lock
@@ -239,7 +246,7 @@ when_instance_ready_end() {
     else
         inform "failed to connect duplicate instance $_index, try reboot ($_dup_id)"
         # send reboot command
-        (aws ec2 reboot-instances --instance-ids "$_dup_id"  2>&1 1>/dev/null)
+        (aws ec2 reboot-instances --instance-ids "$_dup_id"  1>/dev/null 2>/dev/null)
     fi
 }
 when_instance_sync_begin() {
@@ -305,7 +312,6 @@ util_get_user() {
     fi
 }
 
-# TODO: create or reboot
 do_create() {
     local _index="$1"
     local _origin_id="$2"
@@ -338,7 +344,7 @@ do_create() {
     exit 0
 }
 
-# TODO: improve 'ready' check
+# TODO: improve 'ready' check (add aws instance status check)
 do_check_ready() {
     local _instance="$1"
     local _msg="$2"
@@ -349,10 +355,6 @@ do_check_ready() {
     local _timeout=300
     for ((i=0;i<_timeout;i+=6))
     do
-        # read _inst_status _sys_status<<<$(aws ec2 describe-instance-status --instance-id $_instance --output text --query 'InstanceStatuses[0].{system:SystemStatus.Status,inst:InstanceStatus.Status}')
-        # if [ "$_inst_status" != "ok" ] || [ "$_sys_status" != "ok" ] ; then
-        #     continue
-        # fi
         local _ret=$(ssh-keyscan $_host 2>/dev/null)
         if [ "$?" == "0" ] && [ "$_ret" != "" ] ; then
             exit 0
@@ -362,7 +364,6 @@ do_check_ready() {
     fatal "wait instance $_instance timeout $_msg"
 }
 
-# TODO: we need a better sync strategy !!!! (solve permission problem)
 do_sync() {
     local _index="$1"
     local _origin_id="$2"
@@ -379,40 +380,99 @@ do_sync() {
     local _user2=$(util_get_user $_host2 "(duplicate $_index)")
     if [ "$_user2" == "" ]; then exit 1; fi
 
-    for ((i=0; i<1; i++))
-    do
-        inform "$_origin_id -> $_dup_id, dir:$_dir, try $i"
-        inform "$_user1@$_host1 -> $_user2@$_host2 :$_dir"
+    inform "$_user1@$_host1 -> $_user2@$_host2 :$_dir"
 
-        local _has_rsync=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'which rsync')
-        if [ "$_has_rsync" != "" ] ; then
-            # generate temporary SSH key
-            local _tmp_key=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'if [ -e ".ssh/afewmore_tmp.rsa" ]; then echo T; fi')
-            if [ "$_tmp_key" == "" ]; then
-                ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'ssh-keygen -N "" -q -t rsa -f ./.ssh/afewmore_tmp.rsa'
-            fi
-            local _tmp_pubkey=`ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'cat /$HOME/.ssh/afewmore_tmp.rsa.pub'`
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "echo $_tmp_pubkey >> ./.ssh/authorized_keys"
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 "rsync -q -avr --progress -e 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i .ssh/afewmore_tmp.rsa' -d $_dir $_user2@$_host2:$_dir 2>/dev/null"
-            if [ "$?" == "0" ]; then
-                exit 0
-            fi
-        else
-            # warning "origin instance ($_origin_id) doesn't support 'rsync'"
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "mkdir -p '$_dir'"
-            echo scp -o BatchMode=yes -o StrictHostKeyChecking=no -3 -r "'$_user1@$_host1:${_dir}.*'" "'$_user2@$_host2:$_dir'" | sh
-            exit 0
+    # ensure permission on directory
+    if [ "$_user1" != "root" ] ; then
+        local _chown1=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 "which chown" 2>/dev/null)
+        if [ "$_chown1" == "" ]; then
+            fatal "'chown' not found on origin instance ($_origin_id)"
         fi
-    done
+        local _sudo1=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 "which sudo" 2>/dev/null)
+        (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 "$_sudo1 chown -R $_user1 '$_dir'")
+        if [ "$?" != "0" ]; then
+            fatal "failed to chown directory '$_dir' on origin instance ($_origin_id)"
+        fi
+    fi
+    if [ "$_user2" != "root" ] ; then
+        local _sudo2=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "which sudo" 2>/dev/null)
+        (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "$_sudo2 mkdir -p '$_dir'")
+        if [ "$?" != "0" ]; then
+            fatal "failed to create directory '$_dir' on duplicate instance $_index ($_dup_id)"
+        fi
+        local _chown2=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "which chown" 2>/dev/null)
+        if [ "$_chown2" == "" ]; then
+            fatal "'chown' not found on duplicate instance $_index ($_origin_id)"
+        fi
+        (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "$_sudo2 chown -R $_user2 '$_dir'")
+        if [ "$?" != "0" ]; then
+            fatal "failed to chown directory '$_dir' on duplicate instance $_index ($_dup_id)"
+        fi
+    fi
 
-    exit 1
+    # try 'rsync' first
+    local _has_rsync=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'which rsync 2>&1 1>/dev/null && echo Y || echo N' 2>/dev/null)
+    if [ "$_has_rsync" == "Y" ] ; then
+        # generate temporary SSH key on origin instance
+        local _tmp_key=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'if [ -e ".ssh/afewmore_tmp.rsa" ]; then echo T; fi' 2>/dev/null)
+        if [ "$_tmp_key" == "" ]; then
+            (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'ssh-keygen -N "" -q -t rsa -f ./.ssh/afewmore_tmp.rsa' 1>/dev/null 2>/dev/null)
+            if [ "$?" != "0" ]; then
+                fatal "failed to create temporary ssh-key on origin instance ($_origin_id)"
+            fi
+        fi
+        # get temporary SSH public key
+        local _tmp_pubkey=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 'cat /$HOME/.ssh/afewmore_tmp.rsa.pub' 2>/dev/null)
+        if [ "$?" != "0" ]; then
+            fatal "failed to get public key from origin instance ($_origin_id)"
+        fi
+        # copy temporary SSH public key to duplicate instance
+        (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "echo $_tmp_pubkey >> ./.ssh/authorized_keys" 1>/dev/null 2>/dev/null)
+        if [ "$?" != "0" ]; then
+            fatal "failed to copy public key to duplicate instance $_index ($_dup_id)"
+        fi
+        # run rsync on orign instance
+        (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user1@$_host1 "rsync -q -avr -e 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no -i .ssh/afewmore_tmp.rsa' -d $_dir $_user2@$_host2:$_dir 2>/dev/null" 1>/dev/null 2>/dev/null)
+        if [ "$?" != "0" ]; then
+            fatal "rsync failed to copy '$_dir' to duplicate instance $_index ($_dup_id)"
+        fi
+        exit 0
+    fi
+
+    # try 'scp'
+    # copy to /tmp
+    local _tmp_dir="/tmp$_dir"
+    (scp -o BatchMode=yes -o StrictHostKeyChecking=no -3 -r "$_user1@$_host1:$_dir" "$_user2@$_host2:$_tmp_dir")
+    if [ "$?" != "0" ]; then exit 1; fi
+    # clean dest directory
+    (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "rm -rf \$(find '$_dir' 2>/dev/null | tail -n +2)")
+    if [ "$?" != "0" ]; then
+        fatal "failed to clean directory '$_dir' on duplicate instance $_index ($_dup_id)"
+    fi
+    # move from /tmp to dest directory
+    (ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user2@$_host2 "mv -f '$_tmp_dir' '$(dirname $_dir)'")
+    if [ "$?" != "0" ]; then
+        fatal "failed to move directory '$_dir' on duplicate instance $_index ($_dup_id)"
+    fi
+    exit 0
 }
 
-# TODO: check sync result
+# TODO: better result check algorithm (e.g. checksum)
 do_check_done() {
     local _origin_id="$1"
     local _dup_id="$2"
     local _dir="$3"
+
+    # local _host1=$(util_get_host $_origin_id "(origin)")
+    # if [ "$_host1" == "" ]; then exit 1; fi
+    # local _host2=$(util_get_host $_dup_id "(duplicate $_index)")
+    # if [ "$_host2" == "" ]; then exit 1; fi
+
+    # local _user1=$(util_get_user $_host1 "(origin)")
+    # if [ "$_user1" == "" ]; then exit 1; fi
+    # local _user2=$(util_get_user $_host2 "(duplicate $_index)")
+    # if [ "$_user2" == "" ]; then exit 1; fi
+
     exit 0
 }
 
@@ -518,7 +578,13 @@ eval "exec 202>${TASK_FILE}.lock" || fatal "failed to create task lock file ${TA
 while true ; do
     case "$1" in
         -h) usage ;;
-        -d) shift ; COPY_DIR="$1" ; shift ;;
+        -d) shift ;
+            if [ "${1::1}" == "/" ]; then
+                COPY_DIR="$1"
+            else
+                COPY_DIR="$PWD/$1"
+            fi;
+            shift ;;
         -n) shift ; COPY_NUM="$1" ; shift ;;
         -v) shift ; VERBOSE="T" ;;
         -*) usage "illegal option $1" ;;

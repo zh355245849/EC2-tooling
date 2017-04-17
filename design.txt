@@ -52,8 +52,8 @@ Config() // ~/.afewmore/...
 > duplicate 1 instance [Done]
 > duplicate 3 instance [Done]
 > duplicate netbsd [Done]
-> duplicate ubuntu [permission denied on path /data]
+> duplicate ubuntu [Done]
 > duplicate fedora [Done]
-> duplicate ominios
+> duplicate ominios [Done]
 > backup 1 GB file
 
