@@ -124,7 +124,7 @@ verify_copy_dir() {
         fi
         _dir="$_pwd/$_dir"
     fi
-    local _dir_exist=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user@$_host "if [ -d '$_dir' ] ; then echo T; else echo F; fi")
+    local _dir_exist=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no $_user@$_host "[ -d '$_dir' ] && echo T || echo F")
     if [ "$_dir_exist" != "T" ] ; then
         fatal "can't find directory '$_dir' on instance $_origin_id (origin)"
     fi
