@@ -1,0 +1,165 @@
+
+[TODO] -- things we considered to do, but not do yet
+
+Outline
+    ## Program
+    ## Design & Implementation
+    ## Test
+    ## Challenge & Comments
+    ## Reference
+
+## Program
+
+    Step 1: Parse options
+
+        > parse options
+
+    Step 2: Verification
+
+        > verify parameters format & availability (number, instance-id)
+            > check if 'instance-id' is valid
+            > check if 'number' is reasonable
+        > verify external command status (aws, ssh)
+            > check 'aws' and '.aws/config'
+            > check 'ssh' and try login to current machine using public dns name
+        > verify instance has directory
+            > convert copy directory to full path
+            > check existance of directory
+
+    Step 3: Create duplicate instances
+
+        > query original instance information
+        > create duplicate instance
+        > wait until duplicate instance is ready to login
+
+    Step 4: Synchronize directory to all duplicate instances
+
+        > get user and host(PublicDnsName) of original and duplicate instance
+        > synchronize
+            > ensure we have enough permission on directory
+            > try to synchronize directory with 'rsync'
+            > if failed, try to synchronize directory with 'scp'
+
+    Step 5: Check result
+
+        > all done, exit 0
+        > otherwise, go to Step 3 and try again (up to 3 times now)
+
+## Design & Implementation
+
+    0. Basic Assumption
+
+        > 'bash' is available
+        > if 'aws' returns 0, it has done its job
+        > if 'rsync' or 'scp' returns 0, copy succeed
+        * ssh and its config is verified in script, so its not an assumption
+
+    1. Continuity
+
+        > use config file to log progress
+            > format: <number> <directory> <instance-id>
+                    <dup-instance-id-0> <status>
+                    <dup-instance-id-1> <status>
+                    <dup-instance-id-2> <status>
+            > use 'flock' to ensure exclusive read/write
+        > with config file, we can
+            > continue on where we left after expected or unexpected program
+            termination, example:
+
+            ~$ ./afewmore.sh -n 1 i-04d89f601cb92ea77
+            [info] verifying parameters and environment...
+            [info] creating task...
+            [info] Start main loop.
+            [info] create duplicate instance 0 from origin instance (i-04d89f601cb92ea77)
+            [info] duplicate instance 0 created (i-06b1f5e561aa131bf)
+            [info] wait for duplicate instance 0 ready (i-06b1f5e561aa131bf)
+            ^C
+            ~$ ./afewmore.sh -n 1 i-04d89f601cb92ea77
+            ...
+            found unfinished task /home/ubuntu/.afewmore/task.0 (0/1), continue it?[y/n]y
+            ...
+            [info] syncing '/data/' to duplicate instance 0 (i-06b1f5e561aa131bf)
+            [info] ubuntu@ec2-107-23-35-2.compute-1.amazonaws.com -> ubuntu@ec2-54-86-74-200.compute-1.amazonaws.com :/data/
+            [info] duplicate instance 0 finished sync (i-06b1f5e561aa131bf)
+            [info] check sync result of duplicate instance 0 (i-06b1f5e561aa131bf)
+            [info] duplicate instance 0 done (i-06b1f5e561aa131bf)
+            i-06b1f5e561aa131bf
+            [info] ---- all: 1 done: 1 ----
+            [info] All done.
+
+    2. Verification & Correctness
+        > parameters format
+        > tools' availability
+        > singleton (only one 'afewmore' is running for current user)
+        > result correctness
+            > when an instance is created, do_ready_check() will try to login it
+            > when an instance finishes sync, do_done_check() will try to verify it [TODO]
+
+    3. Error handling
+        > format output
+            > create helper functions to unify information output
+            fatal(), warning(), inform()
+        > run and capture (don't let the main routine down)
+            > run commands in sub-shell, capture stdout and stderr
+        > handle strategy
+            > in worker functions (do_xxx, util_xxx), we generally call fatal()
+            with error message, let outer manager function to handle it.
+            > in manager functions (main), we capture 'worker' functions output
+            and exit code,
+                > if failed, try recovery,
+                > if try failed many times, call fatal() with error message
+
+    4. Efficiency
+        > minimize 'aws' query call
+            > use one query to get all information in do_create()
+        > cache time-consuming remote call result [TODO]
+        > speedup with multi-process [TODO]
+            * (this should not be very hard in current implementation, we have
+            lock protected progress files, worker functions are independent
+            from each other, main() send them everything they need)
+
+    5. Coding Style
+        > variable name
+            > GLOBAL_VARIABEL, _local_variable
+        > parameter passing
+            > in: all external parameters are stored in local variables at the start of function
+            > out: when call function in subshell, use 'echo' to send return values
+
+    6. Transparency & Cleanness [TODO]
+        > show file creation (local and remote), 'aws' non-query commands run
+        > clean temporary files, keys, etc
+
+## Test
+
+    > path
+        > / [Done]
+        > relative path [Done]
+        > absolute path [Done]
+        > path with spaces [Done]
+        > path not exist [Done]
+        * large size (>1GB) [TODO]
+    > copy number
+        > non-number [Done]
+        > non-positive number [Done]
+        > positive number [Done]
+        * larget number (>100) [TODO]
+    > instance id
+        > bad format [Done]
+        > correct format [Done]
+    > create & sync
+        > duplicate 1 instance [Done]
+        > duplicate 3 instance [Done]
+        > duplicate 5 instance [Done]
+        > duplicate ubuntu [Done]
+        > duplicate fedora [Done]
+        > duplicate ominios [Done]
+        > duplicate netbsd [Done]
+
+## Challenge & Comments
+
+    > synchronization strategy & permission problem
+
+## Reference
+
+    http://www.kfirlavi.com/blog/2012/11/06/elegant-locking-of-bash-program/
+
